@@ -25,19 +25,14 @@ export type History = {
 /** Tallies by local day, then model. */
 export type DayTallies = Record<string, Record<string, Tally>>
 
-/** One model request, kept on its own for the hours a limit window spans. */
-export type Recent = { ms: number; model: string; tally: Tally }
-
 /** Which period the invoice shows. */
-export type Tab = 'window' | 'week' | 'cycle' | 'all'
+export type Tab = 'session' | 'week' | 'cycle' | 'all'
 
 declare module 'claude-code' {
   interface PluginState {
     'what-would-it-cost': {
-      /** Each model's tally inside the current 5-hour limit window, across every session. */
+      /** This session's models, live. */
       models: Record<string, Tally>
-      /** When the current 5-hour limit window began, from its reset time; null off a subscription. */
-      windowStart: number | null
       /** Tallies by local day, then model: history and live together. */
       dayModels: DayTallies
       plan: Plan | null
@@ -45,6 +40,7 @@ declare module 'claude-code' {
       billingDay: number | null
       /** When the current 7-day rate-limit window began, from its reset time; null off a subscription. */
       weekStart: number | null
+      ledgerUsd: number | null
       history: History | null
       tab: Tab
     }

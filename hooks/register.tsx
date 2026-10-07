@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { History, Plan, Recent, Tab, Tally } from '../types'
+import type { History, Plan, Tab, Tally } from '../types'
 import { addTranscript, emptyTotals } from './history'
 import type { DayModels } from './history'
 import {
@@ -8,7 +8,6 @@ import {
   EMPTY,
   PLANS,
   addDayModels,
-  addTallies,
   addUsage,
   billOf,
   billingDayFromConfig,
@@ -36,10 +35,6 @@ const DAYS_KEPT = 400
 const DAY = 86_400_000
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const STALE_KEYS = ['cutoff', 'history', 'days', 'liveDays', 'historyDays', 'liveModels', 'historyModels']
-const HOUR = 3_600_000
-const WINDOW = 5 * HOUR
-// Requests are kept one by one this long: a 5-hour window, plus room for one that has just reset.
-const RECENT_KEPT = 6 * HOUR
 const READ_LIMIT = 4_000_000
 const CHUNK_MB = 3
 
@@ -56,29 +51,16 @@ const DAY_MODELS = { plugin: 'what-would-it-cost', key: 'dayModels' } as const
 const PLAN = { plugin: 'what-would-it-cost', key: 'plan' } as const
 const BILLING_DAY = { plugin: 'what-would-it-cost', key: 'billingDay' } as const
 const WEEK_START = { plugin: 'what-would-it-cost', key: 'weekStart' } as const
-const WINDOW_START = { plugin: 'what-would-it-cost', key: 'windowStart' } as const
+const LEDGER = { plugin: 'what-would-it-cost', key: 'ledgerUsd' } as const
 const HISTORY = { plugin: 'what-would-it-cost', key: 'history' } as const
 const TAB = { plugin: 'what-would-it-cost', key: 'tab' } as const
 
 type Models = Record<string, Tally>
-type Transcript = { path: string; size: number; mtimeMs: number }
 
 const lastDays = (byDay: Record<string, number>, now: number, count: number) =>
   Array.from({ length: count }, (_, i) => byDay[dayKey(now - (count - 1 - i) * DAY)] ?? 0)
 
 const short = (ms: number) => `${MONTHS[new Date(ms).getMonth()]} ${new Date(ms).getDate()}`
-
-const clock = (ms: number) => {
-  const d = new Date(ms)
-  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-/** Each model's tally over the requests at or after `fromMs`. */
-const modelsSince = (recent: readonly Recent[], fromMs: number): Models => {
-  const byModel: Models = {}
-  for (const r of recent) if (r.ms >= fromMs) byModel[r.model] = addTallies(byModel[r.model] ?? EMPTY, r.tally)
-  return byModel
-}
 
 /** A bar chart `rows` tall, one column per value, colored by how busy the day was (a Raster's cells). */
 const chartCells = (values: readonly number[], rows: number): string => {
@@ -119,26 +101,25 @@ const shares = (byModel: Models, width: number) => {
 
 /** Every value the band and the invoice draw from; read while drawing, so a change redraws them. */
 async function snapshot($: EngineInterface) {
-  const [models, windowStart, dayModels, plan, billingDay, weekStart, history, tab] = await Promise.all([
+  const [models, dayModels, plan, billingDay, weekStart, ledger, history, tab] = await Promise.all([
     $.state.get(MODELS),
-    $.state.get(WINDOW_START),
     $.state.get(DAY_MODELS),
     $.state.get(PLAN),
     $.state.get(BILLING_DAY),
     $.state.get(WEEK_START),
+    $.state.get(LEDGER),
     $.state.get(HISTORY),
     $.state.get(TAB),
   ])
   return {
     models: models.value ?? {},
-    windowStart: windowStart.value ?? null,
     dayModels: dayModels.value ?? {},
     plan: plan.value ?? null,
     billingDay: billingDay.value ?? null,
     weekStart: weekStart.value ?? null,
+    ledger: ledger.value ?? null,
     history: history.value ?? null,
-    // A tab saved by an older version ('session') opens on the cycle.
-    tab: tab.value && ['window', 'week', 'cycle', 'all'].includes(tab.value) ? tab.value : 'cycle',
+    tab: tab.value ?? 'cycle',
   }
 }
 
@@ -146,12 +127,6 @@ async function snapshot($: EngineInterface) {
 async function storedDays($: EngineInterface, key: string): Promise<DayModels> {
   const value = await $.store.get(key)
   return (value as DayModels | undefined) ?? {}
-}
-
-/** Requests kept one by one in the store under `key`, empty when absent. */
-async function storedRecent($: EngineInterface, key: string): Promise<Recent[]> {
-  const value = await $.store.get(key)
-  return (value as Recent[] | undefined) ?? []
 }
 
 /** Where Claude Code keeps its config: $CLAUDE_CONFIG_DIR, else ~/.claude. */
@@ -166,15 +141,9 @@ async function refresh($: EngineInterface) {
   const past = await storedDays($, 'v2.historyDayModels')
   const live = await storedDays($, 'v2.liveDayModels')
   await $.state.set(DAY_MODELS, addDayModels(past, live))
-
-  // The 5-hour window: every session's requests since it began, history and live together.
-  const now = await $.clock.now()
-  const start = (await $.state.get(WINDOW_START)).value ?? now - WINDOW
-  const recent = [...(await storedRecent($, 'v2.historyRecent')), ...(await storedRecent($, 'v2.liveRecent'))]
-  await $.state.set(MODELS, modelsSince(recent, start))
 }
 
-/** When the 5-hour and 7-day limit windows began, from the reset times the status line shows. */
+/** The engine's own /cost total (a cross-check) and the 7-day limit window, from the status line's figures. */
 async function readUsage($: EngineInterface) {
   let usage
   try {
@@ -182,26 +151,18 @@ async function readUsage($: EngineInterface) {
   } catch {
     return
   }
-  const weekResets = Date.parse(usage.rateLimits.find(limit => limit.kind === 'seven_day')?.resetsAt ?? '')
-  if (!Number.isNaN(weekResets)) await $.state.set(WEEK_START, weekResets - 7 * DAY)
-
-  // A window that has already reset counts from its reset: the next request opens the new one.
-  const resets = Date.parse(usage.rateLimits.find(limit => limit.kind === 'five_hour')?.resetsAt ?? '')
-  if (!Number.isNaN(resets)) {
-    const now = await $.clock.now()
-    await $.state.set(WINDOW_START, resets > now ? resets - WINDOW : resets)
-  }
+  await $.state.set(LEDGER, usage.cost?.usd ?? null)
+  const resets = Date.parse(usage.rateLimits.find(limit => limit.kind === 'seven_day')?.resetsAt ?? '')
+  if (!Number.isNaN(resets)) await $.state.set(WEEK_START, resets - 7 * DAY)
 }
 
-/** One model request's usage onto the day and the recent requests, then everything re-read. */
+/** One model request's usage onto the session and the day, and the engine's figures re-read. */
 async function account($: EngineInterface, usage: Usage & { model: string }) {
   const model = usage.model || 'unknown'
-  const now = await $.clock.now()
-  const today = dayKey(now)
+  const today = dayKey(await $.clock.now())
 
-  const recent = (await storedRecent($, 'v2.liveRecent')).filter(r => r.ms >= now - RECENT_KEPT)
-  recent.push({ ms: now, model, tally: addUsage(EMPTY, usage) })
-  await $.store.set('v2.liveRecent', recent)
+  const session = (await $.state.get(MODELS)).value ?? {}
+  await $.state.set(MODELS, { ...session, [model]: addUsage(session[model] ?? EMPTY, usage) })
 
   // Re-read the store so sessions running side by side add up instead of overwriting.
   const live = await storedDays($, 'v2.liveDayModels')
@@ -214,8 +175,8 @@ async function account($: EngineInterface, usage: Usage & { model: string }) {
   const byModel = (kept[today] ??= {})
   byModel[model] = addUsage(byModel[model] ?? EMPTY, usage)
   await $.store.set('v2.liveDayModels', kept)
-  await readUsage($)
   await refresh($)
+  await readUsage($)
 }
 
 /** Reads one transcript into `text` pieces that end on whole lines; past the read limit, in `dd` chunks. */
@@ -239,17 +200,17 @@ async function* linesOf($: EngineInterface, path: string, size: number): AsyncGe
 }
 
 /** Every transcript under `dir`: each project's sessions and their subagents. */
-async function transcriptsIn($: EngineInterface, dir: string, depth: number): Promise<Transcript[]> {
+async function transcriptsIn($: EngineInterface, dir: string, depth: number): Promise<{ path: string; size: number }[]> {
   let entries
   try {
     entries = await $.fs.list(dir)
   } catch {
     return []
   }
-  const files: Transcript[] = []
+  const files: { path: string; size: number }[] = []
   for (const entry of entries) {
     const path = `${dir}/${entry.name}`
-    if (entry.kind === 'file' && entry.name.endsWith('.jsonl')) files.push({ path, size: entry.size, mtimeMs: entry.mtimeMs })
+    if (entry.kind === 'file' && entry.name.endsWith('.jsonl')) files.push({ path, size: entry.size })
     else if (entry.kind === 'dir' && depth < 3) files.push(...(await transcriptsIn($, path, depth + 1)))
   }
   return files
@@ -266,9 +227,7 @@ async function readPast($: EngineInterface, cutoff: number) {
     let done = 0
     for (const file of files) {
       try {
-        for await (const text of linesOf($, file.path, file.size)) {
-          addTranscript(text, totals, seen, cutoff, cutoff - RECENT_KEPT)
-        }
+        for await (const text of linesOf($, file.path, file.size)) addTranscript(text, totals, seen, cutoff)
       } catch {
         // One unreadable transcript costs only itself.
       }
@@ -278,7 +237,6 @@ async function readPast($: EngineInterface, cutoff: number) {
 
     const finished: History = { status: 'done', filesDone: 0, files: 0, requests: totals.requests }
     await $.store.set('v2.historyDayModels', totals.dayModels)
-    await $.store.set('v2.historyRecent', totals.recent)
     await $.store.set('v2.history', finished)
     await $.state.set(HISTORY, finished)
     await refresh($)
@@ -287,26 +245,6 @@ async function readPast($: EngineInterface, cutoff: number) {
   } catch {
     await $.state.set(HISTORY, { status: 'failed', filesDone: 0, files: 0, requests: 0 })
   }
-}
-
-/**
- * The requests just before the cutoff, for an install whose history was read before
- * requests were kept one by one: only the transcripts touched in those hours.
- */
-async function readRecentPast($: EngineInterface, cutoff: number) {
-  const from = cutoff - RECENT_KEPT
-  const files = (await transcriptsIn($, `${await configDir($)}/projects`, 0)).filter(f => f.mtimeMs >= from)
-  const totals = emptyTotals()
-  const seen = new Set<string>()
-  for (const file of files) {
-    try {
-      for await (const text of linesOf($, file.path, file.size)) addTranscript(text, totals, seen, cutoff, from)
-    } catch {
-      // One unreadable transcript costs only itself.
-    }
-  }
-  await $.store.set('v2.historyRecent', totals.recent)
-  await refresh($)
 }
 
 /** The plan and its renewal day: Claude Code's own config names both; else `claude auth status` names the plan. */
@@ -346,7 +284,7 @@ async function openInvoice($: EngineInterface) {
 }
 
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
-  ['window', '5 hours'],
+  ['session', 'Session'],
   ['week', '7 days'],
   ['cycle', 'Cycle'],
   ['all', 'All time'],
@@ -367,12 +305,6 @@ export const register: Register = (on, options) => {
     const from = cutoff
     if (past?.status === 'done') await $.state.set(HISTORY, past)
     else $.clock.after(100, () => void readPast($, from))
-    const hasRecent = (await $.store.get('v2.historyRecent')) !== undefined
-    const isRecentInstall = (await $.clock.now()) - cutoff < RECENT_KEPT
-    if (past?.status === 'done' && !hasRecent && isRecentInstall) $.clock.after(200, () => void readRecentPast($, from))
-
-    // Other Claude Code sessions add to the same store: pick their requests up as they land.
-    $.clock.every(30_000, () => void refresh($))
 
     const chosen = String(options.plan ?? 'auto')
     const day = Math.round(Number(options.billingDay ?? 0))
@@ -398,7 +330,7 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
     const drawn = await snapshot($)
-    const windowModels = drawn.models
+    const sessionModels = drawn.models
     const byDay = dayTotals(drawn.dayModels)
     const p = drawn.plan
     const past = drawn.history
@@ -407,7 +339,7 @@ export const register: Register = (on, options) => {
     const week = sumSince(byDay, drawn.weekStart ?? now - 6 * DAY, now)
     const ratio = p?.usd ? cycle / p.usd : null
     const fortnight = lastDays(byDay, now, 14)
-    const mix = shares(windowModels, 6)
+    const mix = shares(sessionModels, 6)
 
     let trend
     if (e.surface === 'terminal') {
@@ -424,9 +356,9 @@ export const register: Register = (on, options) => {
             {e.props.isWorking ? '◉ ' : '◎ '}
           </Text>
           <Text color={ORANGE} bold>
-            {usd(sumOf(windowModels))}
+            {usd(sumOf(sessionModels))}
           </Text>
-          <Text dimColor> 5h </Text>
+          <Text dimColor> session </Text>
           {mix.map(row => (
             <Text color={colorOf(row.model)}>{'▮'.repeat(row.cells)}</Text>
           ))}
@@ -477,22 +409,22 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const today = dayKey(now)
     const drawn = await snapshot($)
-    const windowModels = drawn.models
+    const sessionModels = drawn.models
     const allDays = drawn.dayModels
     const byDay = dayTotals(allDays)
     const p = drawn.plan
+    const ledger = drawn.ledger
     const past = drawn.history
     const chosen = drawn.tab
     const renews = drawn.billingDay ?? 1
     const start = cycleStart(now, renews)
     const end = cycleEnd(start, renews)
     const limitWeek = drawn.weekStart
-    const windowStart = drawn.windowStart
     const firstDay = Object.keys(allDays).sort()[0] ?? today
 
     const scope: Models =
-      chosen === 'window'
-        ? windowModels
+      chosen === 'session'
+        ? sessionModels
         : chosen === 'week'
           ? modelsBetween(allDays, dayKey(limitWeek ?? now - 6 * DAY), today)
           : chosen === 'cycle'
@@ -519,10 +451,8 @@ export const register: Register = (on, options) => {
     const length = Math.round((end - start) / DAY)
     const ratio = chosen === 'cycle' && p?.usd ? total / p.usd : null
     const subtitle =
-      chosen === 'window'
-        ? windowStart === null
-          ? `last 5 hours · ${requests.toLocaleString('en-US')} requests`
-          : `5-hour limit window · ${clock(windowStart)} → ${clock(windowStart + WINDOW)} · ${requests.toLocaleString('en-US')} requests`
+      chosen === 'session'
+        ? `this session · ${requests.toLocaleString('en-US')} requests`
         : chosen === 'week'
           ? limitWeek === null
             ? `last 7 days · ${requests.toLocaleString('en-US')} requests`
@@ -584,7 +514,7 @@ export const register: Register = (on, options) => {
             )}
           </Box>
           <Text dimColor>{subtitle}</Text>
-          {past?.status === 'reading' && (
+          {past?.status === 'reading' && chosen !== 'session' && (
             <Text color={TEAL}>
               ⟳ {readingQuip(now)} {past.filesDone}/{past.files || '…'}
             </Text>
@@ -627,6 +557,9 @@ export const register: Register = (on, options) => {
             {split('cache read', lines.read)}
           </Box>
           {lines.saved > 0 && <Text color={GREEN}>{cacheQuip(lines.saved, now)}</Text>}
+          {chosen === 'session' && ledger !== null && (
+            <Text dimColor>Claude Code's own /cost says {usd(ledger)}. We checked.</Text>
+          )}
           <Text> </Text>
 
           <Box justifyContent="space-between" width={span}>

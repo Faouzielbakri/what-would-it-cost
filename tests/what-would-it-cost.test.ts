@@ -123,18 +123,6 @@ describe('quips', () => {
 })
 
 describe('history', () => {
-  test('keeps the requests since a moment one by one, for the 5-hour window', () => {
-    const totals = emptyTotals()
-    const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-    const lines = [
-      JSON.stringify({ type: 'assistant', timestamp: new Date(NOON - 2 * 3_600_000).toISOString(), requestId: 'r1', message: { id: 'm1', model: 'claude-opus-5-5', usage } }),
-      JSON.stringify({ type: 'assistant', timestamp: new Date(NOON - 9 * 3_600_000).toISOString(), requestId: 'r2', message: { id: 'm2', model: 'claude-opus-5-5', usage } }),
-    ].join('\n')
-    addTranscript(lines, totals, new Set(), NOON, NOON - 6 * 3_600_000)
-    expect(totals.requests).toBe(2)
-    expect(totals.recent.map(r => r.ms)).toEqual([NOON - 2 * 3_600_000])
-  })
-
   const line = (id: string, ts: string, usage: object, model = 'claude-opus-5-5') =>
     JSON.stringify({ type: 'assistant', timestamp: ts, requestId: `req_${id}`, message: { id, model, usage } })
   const usage = {
@@ -168,48 +156,6 @@ describe('history', () => {
   })
 })
 
-test('the window counts every session, history included, and only since it began', async ($, on) => {
-  mock.clock(on, { now: NOON })
-  mock.env(on, { HOME: '/home/test' })
-  const opus = { input: 0, output: 100_000, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, turns: 1 }
-  mock.store(on, {
-    'v2.cutoff': NOON - 3_600_000,
-    'v2.history': { status: 'done', filesDone: 0, files: 0, requests: 2 },
-    'v2.historyDayModels': {},
-    // 10:00 is inside the window that began at 9:00; 8:00 is not.
-    'v2.historyRecent': [
-      { ms: NOON - 2 * 3_600_000, model: 'claude-opus-5-5', tally: opus },
-      { ms: NOON - 4 * 3_600_000, model: 'claude-opus-5-5', tally: opus },
-    ],
-    // Another session's request at 11:30.
-    'v2.liveRecent': [{ ms: NOON - 1_800_000, model: 'claude-fable-5-1', tally: opus }],
-  })
-  on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const windowResets = new Date(NOON + 2 * 3_600_000).toISOString()
-  on(
-    'session.usage',
-    () => ({ value: { startedAt: NOON, context: {}, rateLimits: [{ kind: 'five_hour', percentUsed: 10, resetsAt: windowResets }] } }) as never,
-  )
-  on('turn.step', async function* () {
-    return { turnId: 't1', answer: 'done', toolUses: [], stopReason: 'end_turn', usage: { ...USAGE, model: 'claude-haiku-4-5' } } as never
-  })
-
-  await $.session.start({ cwd: '/tmp', source: 'startup' } as never)
-  for await (const _ of $.turn.step({ turnId: 't1', model: 'claude-haiku-4-5' } as never)) {
-    // the stream's pieces are not what this test reads
-  }
-
-  const band = await $.ui.mount({
-    plugin: 'what-would-it-cost',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140 } as never,
-  })
-  // 10:00 Opus ($2) + 11:30 Fable ($5) + now Haiku (1k x $1 + 100k x $5 + 5M x $0.10 + 200k x $2 = $1.40); 8:00 left out.
-  expect(await band.find({ type: 'Text', text: /^\$8\.40$/ })).toBeDefined()
-  await band.unmount()
-})
-
 test('history and each request land on the band; the invoice opens', { options: { plan: 'max-20x', billingDay: 28 } }, async ($, on) => {
   mock.clock(on, { now: NOON })
   mock.env(on, { HOME: '/home/test' })
@@ -222,14 +168,9 @@ test('history and each request land on the band; the invoice opens', { options: 
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   const resetsAt = new Date(NOON + 2 * 86_400_000).toISOString()
-  // The 5-hour window resets at 14:00, so it began at 9:00.
-  const windowResets = new Date(NOON + 2 * 3_600_000).toISOString()
   on(
     'session.usage',
-    () => ({ value: { startedAt: NOON, context: {}, rateLimits: [
-            { kind: 'seven_day', percentUsed: 40, resetsAt },
-            { kind: 'five_hour', percentUsed: 10, resetsAt: windowResets },
-          ], cost: { usd: 4.6 } } }) as never,
+    () => ({ value: { startedAt: NOON, context: {}, rateLimits: [{ kind: 'seven_day', percentUsed: 40, resetsAt }], cost: { usd: 4.6 } } }) as never,
   )
   on('turn.step', async function* () {
     return { turnId: 't1', answer: 'done', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
@@ -271,9 +212,10 @@ test('history and each request land on the band; the invoice opens', { options: 
     expect(await pane.find({ type: 'Text', text: /Sep 28 → Oct 28 · day 10 of 30/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^Fable 5\.1$/ })).toBeDefined()
 
-    await pane.press({ key: 'tab-window' })
-    expect(await pane.find({ type: 'Text', text: /5-hour limit window · 9:00 → 14:00 · 1 requests/ })).toBeDefined()
+    await pane.press({ key: 'tab-session' })
+    expect(await pane.find({ type: 'Text', text: /this session · 1 requests/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^Fable 5\.1$/ })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /\/cost says \$4\.60\. We checked\./ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /♻ .*\$19\.00/ })).toBeDefined()
 
     await pane.press({ key: 'tab-week' })
