@@ -8,8 +8,8 @@ One line, always on, updated after every model request while Claude works:
 
 | | |
 |---|---|
-| **◉ $4.46 session** | this session at API prices. The dot turns orange while Claude is working |
-| **▮▮▮▮▮▮** | this session's model mix: orange Opus, purple Fable, blue Sonnet, green Haiku |
+| **◉ $4.46 5h** | your current 5-hour limit window at API prices, across every Claude Code session. The dot turns orange while Claude is working |
+| **▮▮▮▮▮▮** | that window's model mix: orange Opus, purple Fable, blue Sonnet, green Haiku |
 | **$16.45 today** | every Claude Code session on this machine today |
 | **$315 7d** | your current weekly limit window, from Claude Code's own reset time |
 | **$438 since Sep 28** | your billing cycle so far, from the day your plan renews |
@@ -21,7 +21,7 @@ It reads your history on install, so the numbers start with your past month inst
 
 ## The invoice
 
-Click **≡ invoice** on the bar for the full bill. Tabs switch it between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model and token type, with a 60-day chart.
+Click **≡ invoice** on the bar for the full bill. Tabs switch it between your **5-hour** limit window, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model and token type, with a 60-day chart.
 
 <p>
   <img src="docs/invoice-cycle.jpg" alt="Claude Code cost invoice for the billing cycle, by model" width="45%">
@@ -43,7 +43,7 @@ Answer `y` to add the marketplace, then pick the **user** scope so it runs in ev
 - **Every model request**, subagents included, priced at Anthropic's list prices per model: input, output, cache reads and cache writes.
 - **Your history** from Claude Code's own transcripts, so nothing is counted twice and nothing needs to be running in the background.
 - **Prompt caching savings**: what the cache reads would have cost as fresh input.
-- **A cross-check**: the session tab shows Claude Code's own `/cost` total next to the mod's.
+- **Every session on this machine**: open Claude Code in five projects and they all add to the same numbers, updated every 30 seconds.
 
 ## Privacy and permissions
 
@@ -58,7 +58,7 @@ Everything stays on your machine.
 | Claude Code's transcripts in `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`) | To price your history on first run. It keeps only each response's model, timestamp and token counts; message text is never stored. |
 | `~/.claude.json`, two fields only: `oauthAccount.*RateLimitTier` and `oauthAccount.subscriptionCreatedAt` | To know your plan (Pro, Max 5x, Max 20x) and the day it renews. Skipped entirely when you set **Your plan** and **Billing day** yourself in `/config`. |
 | The `HOME` and `CLAUDE_CONFIG_DIR` environment variables | To find the two locations above. |
-| Claude Code's own usage figures | For the `/cost` cross-check and your weekly limit's reset time. |
+| Claude Code's own usage figures | For the reset times of your 5-hour and weekly limit windows. |
 
 **Programs it runs:**
 
