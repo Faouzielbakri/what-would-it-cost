@@ -82,4 +82,4 @@ claude plugin test ./what-would-it-cost
 
 ## License
 
-MIT
+MIT. Fork it, remix it, ship it. If you build on it, a link back to [Faouzi El Bakri](https://github.com/Faouzielbakri) is appreciated.
