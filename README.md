@@ -19,6 +19,15 @@ One line, always on, updated after every model request while Claude works:
 
 It reads your history on install, so the numbers start with your past month instead of $0.
 
+## The invoice
+
+Click **≡ invoice** on the bar for the full bill. Tabs switch it between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model and token type, with a 60-day chart.
+
+<p>
+  <img src="docs/invoice-cycle.jpg" alt="Claude Code cost invoice for the billing cycle, by model" width="45%">
+  <img src="docs/invoice-7d.jpg" alt="Claude Code cost invoice for the weekly limit window" width="45%">
+</p>
+
 ## Install
 
 In a Claude Code terminal session:
@@ -28,15 +37,6 @@ In a Claude Code terminal session:
 ```
 
 Answer `y` to add the marketplace, then pick the **user** scope so it runs in every session. On first run it prices every transcript already on your disk (`~/.claude/projects`) and tells you the total when it's done.
-
-## The invoice
-
-Click **≡ invoice** on the bar for the full bill. Tabs switch it between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model and token type, with a 60-day chart.
-
-<p>
-  <img src="docs/invoice-cycle.jpg" alt="Claude Code cost invoice for the billing cycle, by model" width="45%">
-  <img src="docs/invoice-7d.jpg" alt="Claude Code cost invoice for the weekly limit window" width="45%">
-</p>
 
 ## What it counts
 
