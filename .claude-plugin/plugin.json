@@ -1,0 +1,40 @@
+{
+  "name": "what-would-it-cost",
+  "version": "0.1.0",
+  "description": "What your Claude Code session would cost on the API, as a live band and a receipt.",
+  "author": {
+    "name": "Faouzi El Bakri",
+    "url": "https://github.com/Faouzielbakri"
+  },
+  "repository": "https://github.com/Faouzielbakri/what-would-it-cost",
+  "license": "MIT",
+  "keywords": [
+    "cost",
+    "api",
+    "pricing",
+    "tokens",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "plan": {
+      "type": "string",
+      "title": "Your plan",
+      "description": "What you pay, to compare the API bill against. auto reads it from `claude auth status` (Max is read as Max 20x).",
+      "default": "auto",
+      "options": [
+        "auto",
+        "pro",
+        "max-5x",
+        "max-20x",
+        "api"
+      ]
+    },
+    "billingDay": {
+      "type": "number",
+      "title": "Billing day",
+      "description": "Day of the month your plan renews. 0 reads it from your account (the day you subscribed).",
+      "default": 0
+    }
+  }
+}

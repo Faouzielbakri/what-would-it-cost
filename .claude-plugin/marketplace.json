@@ -1,0 +1,6 @@
+{
+  "name": "what-would-it-cost",
+  "description": "A Claude Code mod that shows what your session would cost on the API.",
+  "owner": { "name": "Faouzi El Bakri" },
+  "plugins": [{ "name": "what-would-it-cost", "source": "./" }]
+}
