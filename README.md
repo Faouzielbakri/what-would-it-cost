@@ -4,64 +4,18 @@
 
 A [Claude Code mod](https://claude.dev/blog/getting-started-with-claude-code-mods/) that prices every token your session uses at Anthropic's public API rates. The total sits above your prompt the whole time, so you can see what your plan is saving you.
 
-```
-◉ $4.12 session ▮▮▮▮▮▮ │ $18.40 today │ $190 7d │ $260 since Sep 28 1.3x Max 20x │ ▂▃▅█▇▄▁▂▅▆▇▃▂▁ ≡ invoice  plan paid off…
-```
+![The band above the Claude Code prompt](docs/band.jpg)
 
 In color: the little bar after the session total is this session's model mix, and the sparkline is the last 14 days. It updates after every model request while Claude works. Click **≡ invoice** for the full bill:
 
-```
-╭──────────────────────────────────────────────────────────────────────╮
-│ ≡ INVOICE at API prices                          Max 20x · $200/mo │
-│                                                                      │
-│ Session  7 days  [ Cycle ]  All time                                 │
-│                                                                      │
-│ $260                                                1.30x your plan │
-│ Sep 28 → Oct 28 · day 10 of 30 · on pace for $780                    │
-│                                                                      │
-│ ██████████████████████████████████████████████████████████████████ │
-│ ● Opus 5.5  1,204 req                                      58% $150 │
-│ ● Fable 5.1  402 req                                        35% $90 │
-│ ● Opus 5  88 req                                             7% $20 │
-│                                                                      │
-│ input              $0.40   output                            $41.20 │
-│ cache write      $120.10   cache read                        $98.30 │
-│ ✓ prompt caching saved you $1,180                                    │
-│                                                                      │
-│ last 60 days                                            peak $127 │
-│ ▁▂▅█▃▁▁▂▄▆▇▂▃▅▁▂▅█▃▁▁▂▄▆▇▂▃▅▁▂▅█▃▁▁▂▄▆▇▂▃▅▁▂▅█▃▁▁▂▄▆▇▂▃▅▁▂▅█▃ │
-│ Aug 9                                                         today │
-│                                                                      │
-│ plan paid off. The rest is on Anthropic.                             │
-╰──────────────────────────────────────────────────────────────────────╯
-```
+<p>
+  <img src="docs/invoice-cycle.jpg" alt="The invoice on the billing cycle tab" width="49%">
+  <img src="docs/invoice-7d.jpg" alt="The invoice on the 7-day tab" width="49%">
+</p>
 
 The tabs switch the whole card between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model.
 
 **It has your history from the first minute.** On first run it prices every Claude Code transcript already on your disk (`~/.claude/projects`), so you see your past month right away instead of starting from $0. A toast tells you the total when it's done.
-
-```
-INVOICE
-what this would cost on the API
-────────────────────────────────────────────────────────
-● Opus 5.5 · 41 requests ··························· $4.12
-  input        12.3k x $4/M ························ $0.05
-  output       88.1k x $20/M ······················· $1.76
-  cache write 210.0k x $5/M ························ $1.05
-  cache read    6.3M x $0.2/M ······················ $1.26
-────────────────────────────────────────────────────────
-SESSION TOTAL ······································ $4.12
-prompt caching saved you ·························· $23.10
-Claude Code's own /cost ···························· $4.10
-────────────────────────────────────────────────────────
-today ············································· $18.40
-Oct so far ········································· $212
-you pay (Max 20x) ································ $200/mo
-value multiplier ··································· 1.06x
-plan paid off. The rest is on Anthropic.
-────────────────────────────────────────────────────────
-last 30 days ··▁▂·▅█▃··▁▂▄▆▇▂▃▅·▂▃▁▄▆▅▇█▆▅
-```
 
 ## Install
 
