@@ -22,6 +22,9 @@ export type History = {
   requests: number
 }
 
+/** Tallies by local day, then model. */
+export type DayTallies = Record<string, Record<string, Tally>>
+
 /** Which period the invoice shows. */
 export type Tab = 'session' | 'week' | 'cycle' | 'all'
 
@@ -31,7 +34,7 @@ declare module 'claude-code' {
       /** This session's models, live. */
       models: Record<string, Tally>
       /** Tallies by local day, then model: history and live together. */
-      dayModels: Record<string, Record<string, Tally>>
+      dayModels: DayTallies
       plan: Plan | null
       /** Day of the month the plan renews (1-31); null until known. */
       billingDay: number | null

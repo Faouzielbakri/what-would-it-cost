@@ -20,20 +20,13 @@
     "plan": {
       "type": "string",
       "title": "Your plan",
-      "description": "What you pay, to compare the API bill against. auto reads it from `claude auth status` (Max is read as Max 20x).",
-      "default": "auto",
-      "options": [
-        "auto",
-        "pro",
-        "max-5x",
-        "max-20x",
-        "api"
-      ]
+      "description": "What you pay, to compare the API bill against: auto, pro, max-5x, max-20x or api. auto reads it from Claude Code's own config.",
+      "default": "auto"
     },
     "billingDay": {
       "type": "number",
       "title": "Billing day",
-      "description": "Day of the month your plan renews. 0 reads it from your account (the day you subscribed).",
+      "description": "Day of the month your plan renews (1-31). 0 reads it from Claude Code's own config (the day you subscribed).",
       "default": 0
     }
   }

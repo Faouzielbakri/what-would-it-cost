@@ -1,9 +1,8 @@
-import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { History, Plan, Tab, Tally } from '../types'
 import { addTranscript, emptyTotals } from './history'
-import type { DayModels, Totals } from './history'
+import type { DayModels } from './history'
 import {
   BARS,
   EMPTY,
@@ -36,6 +35,8 @@ const DAYS_KEPT = 400
 const DAY = 86_400_000
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const STALE_KEYS = ['cutoff', 'history', 'days', 'liveDays', 'historyDays', 'liveModels', 'historyModels']
+const READ_LIMIT = 4_000_000
+const CHUNK_MB = 3
 
 const ORANGE = '#ff8c5a'
 const GOLD = '#fcc419'
@@ -43,30 +44,23 @@ const TEAL = '#3bc9db'
 const AMBER = '#ffa94d'
 const GREEN = '#51cf66'
 const GREY = '#868e96'
-const TRACK = '#343a40'
 
-const models = atom({ plugin: 'what-would-it-cost', key: 'models' } as const, {})
-const dayModels = atom({ plugin: 'what-would-it-cost', key: 'dayModels' } as const, {})
-const plan = atom({ plugin: 'what-would-it-cost', key: 'plan' } as const, null)
-const billingDay = atom({ plugin: 'what-would-it-cost', key: 'billingDay' } as const, null)
-const weekStart = atom({ plugin: 'what-would-it-cost', key: 'weekStart' } as const, null)
-const ledgerUsd = atom({ plugin: 'what-would-it-cost', key: 'ledgerUsd' } as const, null)
-const history = atom({ plugin: 'what-would-it-cost', key: 'history' } as const, null)
-const tab = atom({ plugin: 'what-would-it-cost', key: 'tab' } as const, 'cycle')
+// The session's drawn values (see types/index.d.ts).
+const MODELS = { plugin: 'what-would-it-cost', key: 'models' } as const
+const DAY_MODELS = { plugin: 'what-would-it-cost', key: 'dayModels' } as const
+const PLAN = { plugin: 'what-would-it-cost', key: 'plan' } as const
+const BILLING_DAY = { plugin: 'what-would-it-cost', key: 'billingDay' } as const
+const WEEK_START = { plugin: 'what-would-it-cost', key: 'weekStart' } as const
+const LEDGER = { plugin: 'what-would-it-cost', key: 'ledgerUsd' } as const
+const HISTORY = { plugin: 'what-would-it-cost', key: 'history' } as const
+const TAB = { plugin: 'what-would-it-cost', key: 'tab' } as const
 
 type Models = Record<string, Tally>
-
-const getStored = async <T,>($: EngineInterface, key: string, fallback: T): Promise<T> =>
-  ((await $.store.get(key)) as T | undefined) ?? fallback
 
 const lastDays = (byDay: Record<string, number>, now: number, count: number) =>
   Array.from({ length: count }, (_, i) => byDay[dayKey(now - (count - 1 - i) * DAY)] ?? 0)
 
 const short = (ms: number) => `${MONTHS[new Date(ms).getMonth()]} ${new Date(ms).getDate()}`
-
-/** Where Claude Code keeps its config, transcripts included. */
-const configDir = async ($: EngineInterface) =>
-  (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
 
 /** A bar chart `rows` tall, one column per value, colored by how busy the day was (a Raster's cells). */
 const chartCells = (values: readonly number[], rows: number): string => {
@@ -96,19 +90,99 @@ const shares = (byModel: Models, width: number) => {
   const total = rows.reduce((sum, row) => sum + row.cost, 0)
   let left = width
   return rows.map((row, i) => {
-    const cells = i === rows.length - 1 ? left : Math.max(1, Math.min(left - (rows.length - 1 - i), Math.round((row.cost / total) * width)))
+    const cells =
+      i === rows.length - 1
+        ? left
+        : Math.max(1, Math.min(left - (rows.length - 1 - i), Math.round((row.cost / total) * width)))
     left -= cells
     return { ...row, cells: Math.max(0, cells), share: total > 0 ? row.cost / total : 0 }
   })
 }
 
-const READ_LIMIT = 4_000_000
-const CHUNK_MB = 3
+/** Every value the band and the invoice draw from; read while drawing, so a change redraws them. */
+async function snapshot($: EngineInterface) {
+  const [models, dayModels, plan, billingDay, weekStart, ledger, history, tab] = await Promise.all([
+    $.state.get(MODELS),
+    $.state.get(DAY_MODELS),
+    $.state.get(PLAN),
+    $.state.get(BILLING_DAY),
+    $.state.get(WEEK_START),
+    $.state.get(LEDGER),
+    $.state.get(HISTORY),
+    $.state.get(TAB),
+  ])
+  return {
+    models: models.value ?? {},
+    dayModels: dayModels.value ?? {},
+    plan: plan.value ?? null,
+    billingDay: billingDay.value ?? null,
+    weekStart: weekStart.value ?? null,
+    ledger: ledger.value ?? null,
+    history: history.value ?? null,
+    tab: tab.value ?? 'cycle',
+  }
+}
 
-/** A file's text in pieces that end on whole lines; past the read limit, in `dd` chunks. */
+/** A day-by-model map kept in the store under `key`, empty when absent. */
+async function storedDays($: EngineInterface, key: string): Promise<DayModels> {
+  const value = await $.store.get(key)
+  return (value as DayModels | undefined) ?? {}
+}
+
+/** Where Claude Code keeps its config: $CLAUDE_CONFIG_DIR, else ~/.claude. */
+async function configDir($: EngineInterface): Promise<string> {
+  const custom = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = await $.env.get('HOME')
+  return custom ?? `${home ?? '~'}/.claude`
+}
+
+/** Re-reads history and live tallies from the store into the drawn state. */
+async function refresh($: EngineInterface) {
+  const past = await storedDays($, 'v2.historyDayModels')
+  const live = await storedDays($, 'v2.liveDayModels')
+  await $.state.set(DAY_MODELS, addDayModels(past, live))
+}
+
+/** The engine's own /cost total (a cross-check) and the 7-day limit window, from the status line's figures. */
+async function readUsage($: EngineInterface) {
+  let usage
+  try {
+    usage = await $.session.usage()
+  } catch {
+    return
+  }
+  await $.state.set(LEDGER, usage.cost?.usd ?? null)
+  const resets = Date.parse(usage.rateLimits.find(limit => limit.kind === 'seven_day')?.resetsAt ?? '')
+  if (!Number.isNaN(resets)) await $.state.set(WEEK_START, resets - 7 * DAY)
+}
+
+/** One model request's usage onto the session and the day, and the engine's figures re-read. */
+async function account($: EngineInterface, usage: Usage & { model: string }) {
+  const model = usage.model || 'unknown'
+  const today = dayKey(await $.clock.now())
+
+  const session = (await $.state.get(MODELS)).value ?? {}
+  await $.state.set(MODELS, { ...session, [model]: addUsage(session[model] ?? EMPTY, usage) })
+
+  // Re-read the store so sessions running side by side add up instead of overwriting.
+  const live = await storedDays($, 'v2.liveDayModels')
+  const kept: DayModels = Object.fromEntries(
+    Object.keys(live)
+      .sort()
+      .slice(-DAYS_KEPT)
+      .map(day => [day, live[day] ?? {}]),
+  )
+  const byModel = (kept[today] ??= {})
+  byModel[model] = addUsage(byModel[model] ?? EMPTY, usage)
+  await $.store.set('v2.liveDayModels', kept)
+  await refresh($)
+  await readUsage($)
+}
+
+/** Reads one transcript into `text` pieces that end on whole lines; past the read limit, in `dd` chunks. */
 async function* linesOf($: EngineInterface, path: string, size: number): AsyncGenerator<string> {
   if (size <= READ_LIMIT) {
-    yield (await $.fs.read(path)) as string
+    yield String(await $.fs.read(path))
     return
   }
   let carry = ''
@@ -125,117 +199,89 @@ async function* linesOf($: EngineInterface, path: string, size: number): AsyncGe
   if (carry) yield carry
 }
 
-/** Every transcript under `projects`: each project's sessions and their subagents. */
-const transcriptsOf = async ($: EngineInterface, projects: string) => {
-  const files: { path: string; size: number }[] = []
-  const walk = async (dir: string, depth: number) => {
-    const entries = await $.fs.list(dir).catch(() => [])
-    for (const entry of entries) {
-      const path = `${dir}/${entry.name}`
-      if (entry.kind === 'file' && entry.name.endsWith('.jsonl')) files.push({ path, size: entry.size })
-      else if (entry.kind === 'dir' && depth < 3) await walk(path, depth + 1)
-    }
+/** Every transcript under `dir`: each project's sessions and their subagents. */
+async function transcriptsIn($: EngineInterface, dir: string, depth: number): Promise<{ path: string; size: number }[]> {
+  let entries
+  try {
+    entries = await $.fs.list(dir)
+  } catch {
+    return []
   }
-  await walk(projects, 0)
+  const files: { path: string; size: number }[] = []
+  for (const entry of entries) {
+    const path = `${dir}/${entry.name}`
+    if (entry.kind === 'file' && entry.name.endsWith('.jsonl')) files.push({ path, size: entry.size })
+    else if (entry.kind === 'dir' && depth < 3) files.push(...(await transcriptsIn($, path, depth + 1)))
+  }
   return files
 }
 
-/** Reads every transcript, reporting progress every few files. */
-const readHistory = async (
-  $: EngineInterface,
-  projects: string,
-  cutoffMs: number,
-  onProgress: (done: number, of: number) => Promise<unknown>,
-): Promise<Totals> => {
-  const files = await transcriptsOf($, projects)
-  const totals = emptyTotals()
-  const seen = new Set<string>()
-  let done = 0
-  for (const file of files) {
-    try {
-      for await (const text of linesOf($, file.path, file.size)) addTranscript(text, totals, seen, cutoffMs)
-    } catch {
-      // One unreadable transcript costs only itself.
-    }
-    done += 1
-    if (done % 5 === 0 || done === files.length) await onProgress(done, files.length)
-  }
-  return totals
-}
-
-/** Re-reads history and live tallies from the store into the drawn state. */
-const refresh = async ($: EngineInterface) => {
-  const [past, live] = await Promise.all([
-    getStored<DayModels>($, 'v2.historyDayModels', {}),
-    getStored<DayModels>($, 'v2.liveDayModels', {}),
-  ])
-  await update($, dayModels, () => addDayModels(past, live))
-}
-
-/** The engine's own /cost total (a cross-check) and the 7-day limit window, from the status line's figures. */
-const readUsage = async ($: EngineInterface) => {
-  const usage = await $.session.usage().catch(() => null)
-  if (usage === null) return
-  await update($, ledgerUsd, () => usage.cost?.usd ?? null)
-  const resets = Date.parse(usage.rateLimits.find(limit => limit.kind === 'seven_day')?.resetsAt ?? '')
-  if (!Number.isNaN(resets)) await update($, weekStart, () => resets - 7 * DAY)
-}
-
-/** One model request's usage onto the session and the day, and the engine's figures re-read. */
-const account = async ($: EngineInterface, usage: Usage & { model: string }) => {
-  const model = usage.model || 'unknown'
-  const today = dayKey(await $.clock.now())
-
-  await update($, models, all => ({ ...all, [model]: addUsage(all[model] ?? EMPTY, usage) }))
-
-  // Re-read the store so sessions running side by side add up instead of overwriting.
-  const live = await getStored<DayModels>($, 'v2.liveDayModels', {})
-  const kept: DayModels = Object.fromEntries(
-    Object.keys(live)
-      .sort()
-      .slice(-DAYS_KEPT)
-      .map(day => [day, live[day] ?? {}]),
-  )
-  const byModel = (kept[today] ??= {})
-  byModel[model] = addUsage(byModel[model] ?? EMPTY, usage)
-  await $.store.set('v2.liveDayModels', kept)
-  await refresh($)
-  await readUsage($)
-}
-
 /** First run: price every transcript already on disk, so the band has a past from the start. */
-const readPast = async ($: EngineInterface, cutoff: number) => {
-  const progress = (filesDone: number, files: number): History => ({ status: 'reading', filesDone, files, requests: 0 })
-  await update($, history, () => progress(0, 0))
+async function readPast($: EngineInterface, cutoff: number) {
+  const reading = (filesDone: number, files: number): History => ({ status: 'reading', filesDone, files, requests: 0 })
+  await $.state.set(HISTORY, reading(0, 0))
   try {
-    const totals = await readHistory($, `${await configDir($)}/projects`, cutoff, (done, of) =>
-      update($, history, () => progress(done, of)),
-    )
-    const done: History = { status: 'done', filesDone: 0, files: 0, requests: totals.requests }
+    const files = await transcriptsIn($, `${await configDir($)}/projects`, 0)
+    const totals = emptyTotals()
+    const seen = new Set<string>()
+    let done = 0
+    for (const file of files) {
+      try {
+        for await (const text of linesOf($, file.path, file.size)) addTranscript(text, totals, seen, cutoff)
+      } catch {
+        // One unreadable transcript costs only itself.
+      }
+      done += 1
+      if (done % 5 === 0 || done === files.length) await $.state.set(HISTORY, reading(done, files.length))
+    }
+
+    const finished: History = { status: 'done', filesDone: 0, files: 0, requests: totals.requests }
     await $.store.set('v2.historyDayModels', totals.dayModels)
-    await $.store.set('v2.history', done)
-    await update($, history, () => done)
+    await $.store.set('v2.history', finished)
+    await $.state.set(HISTORY, finished)
     await refresh($)
     const total = Object.values(dayTotals(totals.dayModels)).reduce((a, b) => a + b, 0)
     $.ui.toast(historyToast(totals.requests, total))
   } catch {
-    await update($, history, () => ({ status: 'failed', filesDone: 0, files: 0, requests: 0 }))
+    await $.state.set(HISTORY, { status: 'failed', filesDone: 0, files: 0, requests: 0 })
   }
 }
 
-/** The plan and its renewal day, from Claude Code's own config, else the plan from `claude auth status`. */
-const findAccount = async ($: EngineInterface): Promise<{ plan: Plan | null; day: number | null }> => {
-  const config = await $.env.get('CLAUDE_CONFIG_DIR')
-  const path = config ? `${config}/.claude.json` : `${(await $.env.get('HOME')) ?? '~'}/.claude.json`
-  const text = await $.fs.read(path).then(String, () => '')
+/** The plan and its renewal day: Claude Code's own config names both; else `claude auth status` names the plan. */
+async function findAccount($: EngineInterface): Promise<{ plan: Plan | null; day: number | null }> {
+  const custom = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = await $.env.get('HOME')
+  const path = custom ? `${custom}/.claude.json` : `${home ?? '~'}/.claude.json`
+  let text = ''
+  try {
+    text = String(await $.fs.read(path))
+  } catch {
+    // No config file: the plan comes from `claude auth status` below.
+  }
   const day = billingDayFromConfig(text)
   const fromConfig = planFromConfig(text)
   if (fromConfig) return { plan: fromConfig, day }
-  const ran = await $.process.run(['claude', 'auth', 'status'], { timeoutMs: 15_000 }).catch(() => null)
-  return { plan: ran?.exitCode === 0 ? planFromAuth(ran.stdout) : null, day }
+  try {
+    const ran = await $.process.run(['claude', 'auth', 'status'], { timeoutMs: 15_000 })
+    return { plan: ran.exitCode === 0 ? planFromAuth(ran.stdout) : null, day }
+  } catch {
+    return { plan: null, day }
+  }
 }
 
-const openInvoice = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Invoice' })
+/** Fills in the plan and renewal day the person did not set themselves. */
+async function settleAccount($: EngineInterface, isPlanAuto: boolean, isDayAuto: boolean) {
+  await readUsage($)
+  // Both set in /config: nothing to look up, and ~/.claude.json is never opened.
+  if (!isPlanAuto && !isDayAuto) return
+  const found = await findAccount($)
+  if (isPlanAuto) await $.state.set(PLAN, found.plan)
+  if (isDayAuto) await $.state.set(BILLING_DAY, found.day ?? 1)
+}
+
+async function openInvoice($: EngineInterface) {
+  await $.ui.open({ id: PANE, title: 'Invoice' })
+}
 
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
   ['session', 'Session'],
@@ -256,24 +302,16 @@ export const register: Register = (on, options) => {
     await refresh($)
 
     const past = (await $.store.get('v2.history')) as History | undefined
-    if (past?.status === 'done') {
-      await update($, history, () => past)
-    } else {
-      const from = cutoff
-      $.clock.after(100, () => void readPast($, from))
-    }
+    const from = cutoff
+    if (past?.status === 'done') await $.state.set(HISTORY, past)
+    else $.clock.after(100, () => void readPast($, from))
 
     const chosen = String(options.plan ?? 'auto')
     const day = Math.round(Number(options.billingDay ?? 0))
-    if (chosen !== 'auto') await update($, plan, () => PLANS[chosen] ?? null)
-    if (day >= 1 && day <= 31) await update($, billingDay, () => day)
-    $.clock.after(100, () => {
-      void readUsage($)
-      void findAccount($).then(async found => {
-        if (chosen === 'auto') await update($, plan, () => found.plan)
-        if (!(day >= 1 && day <= 31)) await update($, billingDay, () => found.day ?? 1)
-      })
-    })
+    const isDayAuto = !(day >= 1 && day <= 31)
+    if (chosen !== 'auto') await $.state.set(PLAN, PLANS[chosen] ?? null)
+    if (!isDayAuto) await $.state.set(BILLING_DAY, day)
+    $.clock.after(100, () => void settleAccount($, chosen === 'auto', isDayAuto))
 
     return next(e)
   })
@@ -291,13 +329,14 @@ export const register: Register = (on, options) => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
-    const sessionModels = await read($, models)
-    const byDay = dayTotals(await read($, dayModels))
-    const p = await read($, plan)
-    const past = await read($, history)
-    const start = cycleStart(now, (await read($, billingDay)) ?? 1)
+    const drawn = await snapshot($)
+    const sessionModels = drawn.models
+    const byDay = dayTotals(drawn.dayModels)
+    const p = drawn.plan
+    const past = drawn.history
+    const start = cycleStart(now, drawn.billingDay ?? 1)
     const cycle = sumSince(byDay, start, now)
-    const week = sumSince(byDay, (await read($, weekStart)) ?? now - 6 * DAY, now)
+    const week = sumSince(byDay, drawn.weekStart ?? now - 6 * DAY, now)
     const ratio = p?.usd ? cycle / p.usd : null
     const fortnight = lastDays(byDay, now, 14)
     const mix = shares(sessionModels, 6)
@@ -346,7 +385,7 @@ export const register: Register = (on, options) => {
         </Text>
         {trend}
         <Text> </Text>
-        <Button key="invoice" label="≡ invoice" plain hover={{ color: ORANGE }} onPress={() => openInvoice($)} />
+        <Button key="invoice" label="≡ invoice" plain hover={{ color: ORANGE }} onPress={() => void openInvoice($)} />
         <Box flexShrink={1}>
           {past?.status === 'reading' ? (
             <Text color={TEAL} wrap="truncate-end">
@@ -369,17 +408,18 @@ export const register: Register = (on, options) => {
     const inner = outer - 4
     const now = await $.clock.now()
     const today = dayKey(now)
-    const sessionModels = await read($, models)
-    const allDays = await read($, dayModels)
+    const drawn = await snapshot($)
+    const sessionModels = drawn.models
+    const allDays = drawn.dayModels
     const byDay = dayTotals(allDays)
-    const p = await read($, plan)
-    const ledger = await read($, ledgerUsd)
-    const past = await read($, history)
-    const chosen = await read($, tab)
-    const renews = (await read($, billingDay)) ?? 1
+    const p = drawn.plan
+    const ledger = drawn.ledger
+    const past = drawn.history
+    const chosen = drawn.tab
+    const renews = drawn.billingDay ?? 1
     const start = cycleStart(now, renews)
     const end = cycleEnd(start, renews)
-    const limitWeek = (await read($, weekStart)) ?? null
+    const limitWeek = drawn.weekStart
     const firstDay = Object.keys(allDays).sort()[0] ?? today
 
     const scope: Models =
@@ -455,9 +495,9 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" gap={2}>
             {TABS.map(([id, label]) =>
               id === chosen ? (
-                <Button key={`tab-${id}`} label={label} variant="primary" onPress={() => update($, tab, () => id)} />
+                <Button key={`tab-${id}`} label={label} variant="primary" onPress={() => void $.state.set(TAB, id)} />
               ) : (
-                <Button key={`tab-${id}`} label={label} plain dimColor onPress={() => update($, tab, () => id)} />
+                <Button key={`tab-${id}`} label={label} plain dimColor onPress={() => void $.state.set(TAB, id)} />
               ),
             )}
           </Box>

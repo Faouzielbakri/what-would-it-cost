@@ -45,6 +45,28 @@ Answer `y` to add the marketplace, then pick the **user** scope so it runs in ev
 - **Prompt caching savings**: what the cache reads would have cost as fresh input.
 - **A cross-check**: the session tab shows Claude Code's own `/cost` total next to the mod's.
 
+## Privacy and permissions
+
+Everything stays on your machine.
+
+**What it sends: nothing.** It makes no network requests and has no telemetry. The numbers are kept in Claude Code's own plugin storage as per-day token totals per model.
+
+**What it reads:**
+
+| What | Why |
+|---|---|
+| Claude Code's transcripts in `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`) | To price your history on first run. It keeps only each response's model, timestamp and token counts; message text is never stored. |
+| `~/.claude.json`, two fields only: `oauthAccount.*RateLimitTier` and `oauthAccount.subscriptionCreatedAt` | To know your plan (Pro, Max 5x, Max 20x) and the day it renews. Skipped entirely when you set **Your plan** and **Billing day** yourself in `/config`. |
+| The `HOME` and `CLAUDE_CONFIG_DIR` environment variables | To find the two locations above. |
+| Claude Code's own usage figures | For the `/cost` cross-check and your weekly limit's reset time. |
+
+**Programs it runs:**
+
+| Command | When and why |
+|---|---|
+| `dd if=<transcript> bs=1048576 skip=<n> count=3` | Only for transcripts over 4 MB, which is the most a mod can read in one go. It reads them in 3 MB chunks, read-only. |
+| `claude auth status` | Only when the plan can't be read from `~/.claude.json`, to tell Pro, Max and API-key accounts apart. |
+
 ## Your plan
 
 It reads your exact plan (Pro, Max 5x or Max 20x) from the rate-limit tier in Claude Code's own config (`~/.claude.json`), falling back to `claude auth status`. To set it yourself, go to `/config` → **what-would-it-cost › Your plan** and pick `pro`, `max-5x`, `max-20x` or `api`.
