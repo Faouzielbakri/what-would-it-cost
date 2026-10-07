@@ -1,6 +1,6 @@
 {
   "name": "what-would-it-cost",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "What your Claude Code session would cost on the API, as a live band and a receipt.",
   "author": {
     "name": "Faouzi El Bakri",

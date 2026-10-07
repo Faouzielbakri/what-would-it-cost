@@ -44,6 +44,7 @@ Answer `y` to add the marketplace, then pick the **user** scope so it runs in ev
 - **Your history** from Claude Code's own transcripts, so nothing is counted twice and nothing needs to be running in the background.
 - **Prompt caching savings**: what the cache reads would have cost as fresh input.
 - **A cross-check**: the session tab shows Claude Code's own `/cost` total next to the mod's.
+- **Every session on this machine** for today, 7d and the cycle: open Claude Code in five projects and they all add to the same numbers, updated every 30 seconds.
 
 ## Privacy and permissions
 

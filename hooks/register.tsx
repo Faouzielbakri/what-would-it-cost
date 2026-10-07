@@ -306,6 +306,9 @@ export const register: Register = (on, options) => {
     if (past?.status === 'done') await $.state.set(HISTORY, past)
     else $.clock.after(100, () => void readPast($, from))
 
+    // Other Claude Code sessions add to the same store: pick their requests up as they land.
+    $.clock.every(30_000, () => void refresh($))
+
     const chosen = String(options.plan ?? 'auto')
     const day = Math.round(Number(options.billingDay ?? 0))
     const isDayAuto = !(day >= 1 && day <= 31)
