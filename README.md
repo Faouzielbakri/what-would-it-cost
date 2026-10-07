@@ -1,21 +1,23 @@
 # what-would-it-cost
 
-**What your Claude Code subscription would cost at API prices.**
+**A Claude Code cost tracker: what your Pro or Max subscription would cost at API prices, live above your prompt.**
 
-A [Claude Code mod](https://claude.dev/blog/getting-started-with-claude-code-mods/) that prices every token your session uses at Anthropic's public API rates. The total sits above your prompt the whole time, so you can see what your plan is saving you.
+![what-would-it-cost: a live API cost bar above the Claude Code prompt](docs/band.jpg)
 
-![The band above the Claude Code prompt](docs/band.jpg)
+One line, always on, updated after every model request while Claude works:
 
-In color: the little bar after the session total is this session's model mix, and the sparkline is the last 14 days. It updates after every model request while Claude works. Click **≡ invoice** for the full bill:
+| | |
+|---|---|
+| **◉ $4.46 session** | this session at API prices. The dot turns orange while Claude is working |
+| **▮▮▮▮▮▮** | this session's model mix: orange Opus, purple Fable, blue Sonnet, green Haiku |
+| **$16.45 today** | every Claude Code session on this machine today |
+| **$315 7d** | your current weekly limit window, from Claude Code's own reset time |
+| **$438 since Sep 28** | your billing cycle so far, from the day your plan renews |
+| **2.2x Max 20x** | how many times over the cycle has paid for your plan |
+| **▂▅█▃▁▆** | the last 14 days, colored from quiet to busy |
+| *Anthropic is picking up the tab…* | a running commentary, with a new line every ten minutes |
 
-<p>
-  <img src="docs/invoice-cycle.jpg" alt="The invoice on the billing cycle tab" width="49%">
-  <img src="docs/invoice-7d.jpg" alt="The invoice on the 7-day tab" width="49%">
-</p>
-
-The tabs switch the whole card between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model.
-
-**It has your history from the first minute.** On first run it prices every Claude Code transcript already on your disk (`~/.claude/projects`), so you see your past month right away instead of starting from $0. A toast tells you the total when it's done.
+It reads your history on install, so the numbers start with your past month instead of $0.
 
 ## Install
 
@@ -25,22 +27,23 @@ In a Claude Code terminal session:
 /plugin install what-would-it-cost --marketplace Faouzielbakri/what-would-it-cost
 ```
 
-Answer `y` to add the marketplace, then pick the **user** scope so it runs in every session.
+Answer `y` to add the marketplace, then pick the **user** scope so it runs in every session. On first run it prices every transcript already on your disk (`~/.claude/projects`) and tells you the total when it's done.
+
+## The invoice
+
+Click **≡ invoice** on the bar for the full bill. Tabs switch it between this **session**, your **7-day** limit window, your **billing cycle** and **all time**, each broken down by model and token type, with a 60-day chart.
+
+<p>
+  <img src="docs/invoice-cycle.jpg" alt="Claude Code cost invoice for the billing cycle, by model" width="45%">
+  <img src="docs/invoice-7d.jpg" alt="Claude Code cost invoice for the weekly limit window" width="45%">
+</p>
 
 ## What it counts
 
-| | |
-|---|---|
-| **session** | this session's tokens, priced per model, subagents included |
-| **today** | every session on this machine, past transcripts included |
-| **7d** | your current weekly limit window, from Claude Code's own reset time (else the last 7 days) |
-| **since …** | your billing cycle so far, from the day your plan renews |
-| **all time** | everything since your oldest transcript, in the invoice |
-| **value multiplier** | the billing cycle so far divided by what your plan costs, plus the pace for the full cycle |
-| **caching saved you** | what the cache reads would have cost as fresh input |
-| **/cost** | Claude Code's own total, as a sanity check |
-
-The dot at the start of the band turns orange while Claude is working. Each invoice line is `tokens x price`, so you can check the math yourself.
+- **Every model request**, subagents included, priced at Anthropic's list prices per model: input, output, cache reads and cache writes.
+- **Your history** from Claude Code's own transcripts, so nothing is counted twice and nothing needs to be running in the background.
+- **Prompt caching savings**: what the cache reads would have cost as fresh input.
+- **A cross-check**: the session tab shows Claude Code's own `/cost` total next to the mod's.
 
 ## Your plan
 
